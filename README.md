@@ -6,6 +6,7 @@ Gestão Inteligente de Finanças com IA - Aplicação estilo Organizze para impo
 
 - **Importação de Faturas**: Upload de PDFs com análise automática por IA via webhook n8n
 - **Categorização Inteligente**: Sistema de IA que aprende com suas correções
+- **Sub-categorias**: Crie sub-categorias por categoria (ex: Transporte → Gasolina, IPVA) e use em lançamentos e regras
 - **Lançamentos**: Visualização e gerenciamento de transações com filtros avançados
 - **Relatórios**: Gráficos e análises detalhadas por categoria e período
 - **Categorias Personalizadas**: Crie e gerencie suas próprias categorias
@@ -40,12 +41,18 @@ Execute o SQL de migração no Supabase SQL Editor:
 
 ```bash
 # Arquivo: supabase/migrations/001_initial_schema.sql
+# Arquivo: supabase/migrations/002_subcategories.sql
 ```
 
 Este script cria:
 - Tabelas `categories`, `user_categories`, `transactions`, `user_rules`
 - Políticas RLS para segurança
 - Categorias padrão
+
+O script `002_subcategories.sql` adiciona:
+- Coluna `transactions.subcategory_name`
+- Coluna `user_rules.fixed_subcategory`
+- Tabela `user_subcategories`
 
 ### 3. Configure as variáveis de ambiente
 
@@ -147,7 +154,7 @@ Todas as tabelas têm políticas RLS que garantem:
 2. Frontend envia para webhook n8n
 3. n8n processa e retorna JSON com transações
 4. Frontend salva automaticamente no Supabase
-5. Regras de aprendizado são aplicadas
+5. Regras de aprendizado são aplicadas (categoria e sub-categoria, quando configuradas)
 
 ## 🤖 Sistema de Aprendizado
 

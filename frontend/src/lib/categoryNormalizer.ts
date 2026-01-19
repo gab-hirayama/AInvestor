@@ -62,6 +62,25 @@ interface Category {
   name: string
 }
 
+const splitCategoryAndSubcategory = (
+  raw: string | null | undefined
+): { category: string | null; subcategory: string | null } => {
+  if (!raw) return { category: null, subcategory: null }
+
+  // Common patterns from LLMs: "Transporte: Gasolina", "Transporte > Gasolina", "Transporte - Gasolina"
+  const separators = [':', '>', ' - ', ' – ', ' — ']
+  for (const sep of separators) {
+    if (raw.includes(sep)) {
+      const [left, ...rest] = raw.split(sep)
+      const category = left?.trim() || null
+      const subcategory = rest.join(sep).trim() || null
+      return { category, subcategory }
+    }
+  }
+
+  return { category: raw.trim() || null, subcategory: null }
+}
+
 /**
  * Normaliza uma categoria da IA para uma categoria válida do Supabase
  * @param aiCategory - Categoria retornada pela IA
@@ -122,13 +141,22 @@ export function normalizeCategory(
 /**
  * Normaliza múltiplas categorias de uma vez
  */
-export function normalizeCategories<T extends { category?: string | null }>(
+export function normalizeCategories<T extends { category?: string | null; subcategory?: string | null }>(
   items: T[],
   availableCategories: Category[]
-): T[] {
-  return items.map((item) => ({
-    ...item,
-    category: normalizeCategory(item.category, availableCategories),
-  }))
+): Array<T & { subcategory?: string | null }> {
+  return items.map((item) => {
+    const split = splitCategoryAndSubcategory(item.category)
+    const normalizedCategory = normalizeCategory(split.category, availableCategories)
+
+    // Prefer explicit subcategory from payload; otherwise use the derived one from category string.
+    const chosenSubcategory = (item.subcategory ?? split.subcategory ?? null)?.trim() || null
+
+    return {
+      ...item,
+      category: normalizedCategory,
+      subcategory: chosenSubcategory,
+    }
+  })
 }
 

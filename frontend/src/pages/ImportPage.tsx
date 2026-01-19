@@ -13,6 +13,12 @@ interface Category {
   icon: string | null
 }
 
+interface UserRule {
+  search_term: string
+  fixed_category: string
+  fixed_subcategory: string | null
+}
+
 export function ImportPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -43,29 +49,79 @@ export function ImportPage() {
       
       // 2. Normalize categories to match available categories
       const normalizedOutput = normalizeCategories(response.output, allCategories)
+
+      // 2.1 Apply user rules (category + optional subcategory) on top of normalized output
+      let rulesData: any[] | null = null
+      {
+        const { data, error } = await supabase
+          .from('user_rules')
+          .select('search_term, fixed_category, fixed_subcategory')
+          .eq('user_id', user.id)
+
+        // If the column doesn't exist yet, fall back to the old schema.
+        if (error && (error as any).code === '42703') {
+          const fallback = await supabase
+            .from('user_rules')
+            .select('search_term, fixed_category')
+            .eq('user_id', user.id)
+          if (fallback.error) throw fallback.error
+          rulesData = fallback.data
+        } else if (error) {
+          throw error
+        } else {
+          rulesData = data
+        }
+      }
+
+      const rules: UserRule[] = (rulesData || []).map((r: any) => ({
+        search_term: String(r.search_term || '').toLowerCase().trim(),
+        fixed_category: String(r.fixed_category || ''),
+        fixed_subcategory: r.fixed_subcategory ?? null,
+      }))
+
+      // Prefer longest match first when using "includes"
+      rules.sort((a, b) => b.search_term.length - a.search_term.length)
+
+      const withRulesApplied = normalizedOutput.map((item: any) => {
+        const desc = String(item.description || '').toLowerCase()
+        const matched = rules.find((r) => r.search_term && (desc.includes(r.search_term) || desc === r.search_term))
+        if (!matched) return item
+
+        return {
+          ...item,
+          category: matched.fixed_category,
+          subcategory: matched.fixed_subcategory ?? item.subcategory ?? null,
+        }
+      })
       
       // 3. Save transactions to Supabase with normalized categories
-      if (normalizedOutput && normalizedOutput.length > 0) {
-        const transactions = normalizedOutput.map((item) => ({
+      if (withRulesApplied && withRulesApplied.length > 0) {
+        const transactions = withRulesApplied.map((item: any) => ({
           user_id: user.id,
           date: item.date,
           description: item.description,
           amount: item.amount,
           category_name: item.category,
+          subcategory_name: item.subcategory ?? null,
           raw_data: item,
         }))
 
-        const { error: insertError } = await supabase
-          .from('transactions')
-          .insert(transactions)
+        const { error: insertError } = await supabase.from('transactions').insert(transactions)
 
-        if (insertError) throw insertError
+        // If the subcategory column doesn't exist yet, retry without it (backwards compatible).
+        if (insertError && (insertError as any).code === '42703') {
+          const fallbackTransactions = transactions.map(({ subcategory_name: _sc, ...rest }) => rest)
+          const { error: fallbackError } = await supabase.from('transactions').insert(fallbackTransactions)
+          if (fallbackError) throw fallbackError
+        } else if (insertError) {
+          throw insertError
+        }
       }
 
       // Return response with normalized categories for display
       return {
         ...response,
-        output: normalizedOutput as typeof response.output
+        output: withRulesApplied as typeof response.output
       }
     },
     onSuccess: (data) => {
@@ -256,7 +312,7 @@ export function ImportPage() {
                         {new Date(transaction.date).toLocaleDateString('pt-BR')}
                       </span>
                       <span className="text-xs bg-primary-100 text-primary-700 px-2 py-1 rounded">
-                        {transaction.category}
+                        {transaction.subcategory ? `${transaction.category} • ${transaction.subcategory}` : transaction.category}
                       </span>
                     </div>
                   </div>

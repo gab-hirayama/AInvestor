@@ -8,6 +8,7 @@ export interface N8NImportResponse {
     description: string
     amount: number
     category: string
+    subcategory?: string | null
   }>
 }
 

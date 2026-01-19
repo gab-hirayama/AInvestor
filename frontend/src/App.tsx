@@ -10,14 +10,24 @@ import { TransactionsPage } from './pages/TransactionsPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { CategoriesPage } from './pages/CategoriesPage'
 import { RulesPage } from './pages/RulesPage'
+import { SetupPage } from './pages/SetupPage'
+import { isSupabaseConfigured } from './lib/supabase'
 
 function App() {
+  if (!isSupabaseConfigured) {
+    return (
+      <Routes>
+        <Route path="*" element={<SetupPage />} />
+      </Routes>
+    )
+  }
+
   return (
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
-        
+
         <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />

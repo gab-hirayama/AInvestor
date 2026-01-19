@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { Search, Filter, Calendar, Edit2, Save, X } from 'lucide-react'
 import { CategoryIcon } from '../components/CategoryIcon'
+import { DateRangePicker } from '../components/DateRangePicker'
 import { format, startOfMonth, endOfMonth } from 'date-fns'
 
 interface Transaction {
@@ -13,6 +14,7 @@ interface Transaction {
   description: string
   amount: number
   category_name: string | null
+  subcategory_name: string | null
   created_at: string
 }
 
@@ -22,6 +24,13 @@ interface Category {
   icon: string | null
 }
 
+interface UserSubcategory {
+  id: string
+  user_id: string
+  category_name: string
+  name: string
+}
+
 export function TransactionsPage() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
@@ -29,12 +38,14 @@ export function TransactionsPage() {
   // Filters
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('')
+  const [selectedSubcategory, setSelectedSubcategory] = useState<string>('')
   const [startDate, setStartDate] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'))
   const [endDate, setEndDate] = useState(format(endOfMonth(new Date()), 'yyyy-MM-dd'))
   
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editCategory, setEditCategory] = useState<string>('')
+  const [editSubcategory, setEditSubcategory] = useState<string>('')
 
   // Fetch transactions
   const { data: transactions = [], isLoading } = useQuery<Transaction[]>({
@@ -71,19 +82,48 @@ export function TransactionsPage() {
     enabled: !!user?.id,
   })
 
+  // Fetch user subcategories
+  const { data: userSubcategories = [] } = useQuery<UserSubcategory[]>({
+    queryKey: ['user_subcategories', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return []
+      const { data, error } = await supabase
+        .from('user_subcategories')
+        .select('id, user_id, category_name, name')
+        .eq('user_id', user.id)
+        .order('category_name')
+        .order('name')
+      // If table doesn't exist yet, just behave as "no subcategories" (backwards compatible).
+      if (error && (error as any).code === '42P01') return []
+      if (error) throw error
+      return data
+    },
+    enabled: !!user?.id,
+  })
+
   // Update transaction category
   const updateCategoryMutation = useMutation({
-    mutationFn: async ({ id, category }: { id: string; category: string }) => {
+    mutationFn: async ({ id, category, subcategory }: { id: string; category: string; subcategory: string | null }) => {
       const { error } = await supabase
         .from('transactions')
-        .update({ category_name: category })
+        .update({ category_name: category, subcategory_name: subcategory })
         .eq('id', id)
+      // If column doesn't exist yet, retry without it (backwards compatible).
+      if (error && (error as any).code === '42703') {
+        const fallback = await supabase
+          .from('transactions')
+          .update({ category_name: category })
+          .eq('id', id)
+        if (fallback.error) throw fallback.error
+        return
+      }
       if (error) throw error
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transactions'] })
       setEditingId(null)
       setEditCategory('')
+      setEditSubcategory('')
     },
   })
 
@@ -92,9 +132,12 @@ export function TransactionsPage() {
     return transactions.filter((t) => {
       const matchesSearch = t.description.toLowerCase().includes(searchTerm.toLowerCase())
       const matchesCategory = !selectedCategory || t.category_name === selectedCategory
-      return matchesSearch && matchesCategory
+      const matchesSubcategory =
+        !selectedSubcategory ||
+        (t.subcategory_name || '') === selectedSubcategory
+      return matchesSearch && matchesCategory && matchesSubcategory
     })
-  }, [transactions, searchTerm, selectedCategory])
+  }, [transactions, searchTerm, selectedCategory, selectedSubcategory])
 
   // Calculate totals
   const totals = useMemo(() => {
@@ -110,11 +153,12 @@ export function TransactionsPage() {
   const startEdit = (transaction: Transaction) => {
     setEditingId(transaction.id)
     setEditCategory(transaction.category_name || '')
+    setEditSubcategory(transaction.subcategory_name || '')
   }
 
   // Save rule mutation
   const saveRuleMutation = useMutation({
-    mutationFn: async ({ searchTerm, category }: { searchTerm: string; category: string }) => {
+    mutationFn: async ({ searchTerm, category, subcategory }: { searchTerm: string; category: string; subcategory: string | null }) => {
       const { error } = await supabase
         .from('user_rules')
         .upsert(
@@ -122,11 +166,27 @@ export function TransactionsPage() {
             user_id: user!.id,
             search_term: searchTerm,
             fixed_category: category,
+            fixed_subcategory: subcategory,
           },
           {
             onConflict: 'user_id,search_term',
           }
         )
+      // If column doesn't exist yet, retry without it (backwards compatible).
+      if (error && (error as any).code === '42703') {
+        const fallback = await supabase
+          .from('user_rules')
+          .upsert(
+            {
+              user_id: user!.id,
+              search_term: searchTerm,
+              fixed_category: category,
+            },
+            { onConflict: 'user_id,search_term' }
+          )
+        if (fallback.error) throw fallback.error
+        return
+      }
       if (error) throw error
     },
     onSuccess: () => {
@@ -135,25 +195,46 @@ export function TransactionsPage() {
   })
 
   const saveCategory = (transactionId: string, description: string) => {
-    updateCategoryMutation.mutate({ id: transactionId, category: editCategory })
+    updateCategoryMutation.mutate({
+      id: transactionId,
+      category: editCategory,
+      subcategory: editSubcategory ? editSubcategory : null,
+    })
     
     // Always save rule automatically when category is changed
     if (editCategory) {
       // Extract a search term from description (first meaningful word or phrase)
       const searchTerm = description.split(/[-–]/)[0].trim().toLowerCase()
-      saveRuleMutation.mutate({ searchTerm, category: editCategory })
+      saveRuleMutation.mutate({ searchTerm, category: editCategory, subcategory: editSubcategory ? editSubcategory : null })
     }
   }
 
   const cancelEdit = () => {
     setEditingId(null)
     setEditCategory('')
+    setEditSubcategory('')
   }
 
   const uniqueCategories = useMemo(() => {
     const cats = new Set(transactions.map((t) => t.category_name).filter(Boolean))
     return Array.from(cats).sort()
   }, [transactions])
+
+  const availableSubcategoriesForFilter = useMemo(() => {
+    const subcats = transactions
+      .filter((t) => !selectedCategory || t.category_name === selectedCategory)
+      .map((t) => t.subcategory_name)
+      .filter(Boolean) as string[]
+    return Array.from(new Set(subcats)).sort()
+  }, [transactions, selectedCategory])
+
+  const subcategoriesForEditCategory = useMemo(() => {
+    if (!editCategory) return []
+    return userSubcategories
+      .filter((s) => s.category_name === editCategory)
+      .map((s) => s.name)
+      .sort((a, b) => a.localeCompare(b))
+  }, [userSubcategories, editCategory])
 
   // Helper function to get transaction color
   const getTransactionColor = (transaction: Transaction): string => {
@@ -200,7 +281,7 @@ export function TransactionsPage() {
 
       {/* Filters */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           {/* Search */}
           <div className="md:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -237,12 +318,32 @@ export function TransactionsPage() {
             </select>
           </div>
 
+          {/* Subcategory Filter */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Sub-categoria
+            </label>
+            <select
+              value={selectedSubcategory}
+              onChange={(e) => setSelectedSubcategory(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            >
+              <option value="">Todas</option>
+              {availableSubcategoriesForFilter.map((sub) => (
+                <option key={sub} value={sub}>
+                  {sub}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Clear Filters */}
           <div className="flex items-end">
             <button
               onClick={() => {
                 setSearchTerm('')
                 setSelectedCategory('')
+                setSelectedSubcategory('')
               }}
               className="w-full flex items-center justify-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
             >
@@ -253,29 +354,16 @@ export function TransactionsPage() {
         </div>
 
         {/* Date Range */}
-        <div className="grid grid-cols-2 gap-4 mt-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Data Inicial
-            </label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Data Final
-            </label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            />
-          </div>
+        <div className="mt-4">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Período
+          </label>
+          <DateRangePicker
+            startDate={startDate}
+            endDate={endDate}
+            onStartDateChange={setStartDate}
+            onEndDateChange={setEndDate}
+          />
         </div>
       </div>
 
@@ -321,7 +409,11 @@ export function TransactionsPage() {
                               className="h-3 w-3 text-primary-600"
                             />
                             <span className="text-xs font-medium text-primary-700">
-                              {transaction.category_name || 'Sem categoria'}
+                              {transaction.category_name
+                                ? (transaction.subcategory_name
+                                    ? `${transaction.category_name} • ${transaction.subcategory_name}`
+                                    : transaction.category_name)
+                                : 'Sem categoria'}
                             </span>
                           </div>
                         </div>
@@ -335,13 +427,30 @@ export function TransactionsPage() {
                       <div className="flex items-center space-x-2">
                         <select
                           value={editCategory}
-                          onChange={(e) => setEditCategory(e.target.value)}
+                          onChange={(e) => {
+                            const next = e.target.value
+                            setEditCategory(next)
+                            setEditSubcategory('')
+                          }}
                           className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500"
                         >
                           <option value="">Sem categoria</option>
                           {allCategories.map((cat) => (
                             <option key={cat.id} value={cat.name}>
                               {cat.name}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={editSubcategory}
+                          onChange={(e) => setEditSubcategory(e.target.value)}
+                          disabled={!editCategory || subcategoriesForEditCategory.length === 0}
+                          className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
+                        >
+                          <option value="">Sem sub-categoria</option>
+                          {subcategoriesForEditCategory.map((sub) => (
+                            <option key={sub} value={sub}>
+                              {sub}
                             </option>
                           ))}
                         </select>

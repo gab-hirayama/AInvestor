@@ -6,6 +6,7 @@ import { format, startOfMonth, endOfMonth } from 'date-fns'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts'
 import { TrendingDown, TrendingUp, DollarSign } from 'lucide-react'
 import { CategoryIcon } from '../components/CategoryIcon'
+import { DateRangePicker } from '../components/DateRangePicker'
 
 interface Transaction {
   id: string
@@ -113,30 +114,15 @@ export function ReportsPage() {
 
       {/* Date Range Filter */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Data Inicial
-            </label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Data Final
-            </label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            />
-          </div>
-        </div>
+        <label className="block text-sm font-medium text-gray-700 mb-3">
+          Período de Análise
+        </label>
+        <DateRangePicker
+          startDate={startDate}
+          endDate={endDate}
+          onStartDateChange={setStartDate}
+          onEndDateChange={setEndDate}
+        />
       </div>
 
       {isLoading ? (
@@ -190,7 +176,12 @@ export function ReportsPage() {
                       cx="50%"
                       cy="50%"
                       labelLine={false}
-                      label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                      label={({ percent }) => {
+                        if (percent > 0.05) {
+                          return `${(percent * 100).toFixed(0)}%`
+                        }
+                        return ''
+                      }}
                       outerRadius={80}
                       fill="#8884d8"
                       dataKey="value"
@@ -199,7 +190,10 @@ export function ReportsPage() {
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(value: number) => `R$ ${value.toFixed(2)}`} />
+                    <Tooltip 
+                      formatter={(value: number) => `R$ ${value.toFixed(2)}`}
+                      labelFormatter={(label) => `${label}`}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
@@ -207,6 +201,45 @@ export function ReportsPage() {
               )}
             </div>
 
+            {/* Income Pie Chart */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Receitas por Categoria</h3>
+              {categoryData.income.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={categoryData.income}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ percent }) => {
+                        if (percent > 0.05) {
+                          return `${(percent * 100).toFixed(0)}%`
+                        }
+                        return ''
+                      }}
+                      outerRadius={80}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {categoryData.income.map((_entry, index) => (
+                        <Cell key={`cell-income-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      formatter={(value: number) => `R$ ${value.toFixed(2)}`}
+                      labelFormatter={(label) => `${label}`}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-gray-500 text-center py-12">Nenhuma receita no período</p>
+              )}
+            </div>
+          </div>
+
+          {/* Bar Charts */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Expenses Bar Chart */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Ranking de Despesas</h3>
@@ -214,14 +247,56 @@ export function ReportsPage() {
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={categoryData.expenses}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" angle={-45} textAnchor="end" height={100} />
-                    <YAxis />
-                    <Tooltip formatter={(value: number) => `R$ ${value.toFixed(2)}`} />
+                    <XAxis 
+                      dataKey="name" 
+                      angle={-45} 
+                      textAnchor="end" 
+                      height={100}
+                      interval={0}
+                      tick={{ fontSize: 12 }}
+                    />
+                    <YAxis 
+                      tickFormatter={(value) => `R$ ${value.toFixed(0)}`}
+                    />
+                    <Tooltip 
+                      formatter={(value: number) => [`R$ ${value.toFixed(2)}`, 'Valor']}
+                      labelFormatter={(label) => `Categoria: ${label}`}
+                    />
                     <Bar dataKey="value" fill="#ef4444" />
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
                 <p className="text-gray-500 text-center py-12">Nenhuma despesa no período</p>
+              )}
+            </div>
+
+            {/* Income Bar Chart */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Ranking de Receitas</h3>
+              {categoryData.income.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={categoryData.income}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis 
+                      dataKey="name" 
+                      angle={-45} 
+                      textAnchor="end" 
+                      height={100}
+                      interval={0}
+                      tick={{ fontSize: 12 }}
+                    />
+                    <YAxis 
+                      tickFormatter={(value) => `R$ ${value.toFixed(0)}`}
+                    />
+                    <Tooltip 
+                      formatter={(value: number) => [`R$ ${value.toFixed(2)}`, 'Valor']}
+                      labelFormatter={(label) => `Categoria: ${label}`}
+                    />
+                    <Bar dataKey="value" fill="#10b981" />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-gray-500 text-center py-12">Nenhuma receita no período</p>
               )}
             </div>
           </div>
@@ -241,7 +316,9 @@ export function ReportsPage() {
                       <div>
                         <p className="font-medium text-gray-900">{item.name}</p>
                         <p className="text-xs text-gray-500">
-                          {((item.value / categoryData.totalExpenses) * 100).toFixed(1)}% do total
+                          {categoryData.totalExpenses > 0 
+                            ? `${((item.value / categoryData.totalExpenses) * 100).toFixed(1)}% do total`
+                            : '0% do total'}
                         </p>
                       </div>
                     </div>
@@ -269,7 +346,9 @@ export function ReportsPage() {
                       <div>
                         <p className="font-medium text-gray-900">{item.name}</p>
                         <p className="text-xs text-gray-500">
-                          {((item.value / categoryData.totalIncome) * 100).toFixed(1)}% do total
+                          {categoryData.totalIncome > 0 
+                            ? `${((item.value / categoryData.totalIncome) * 100).toFixed(1)}% do total`
+                            : '0% do total'}
                         </p>
                       </div>
                     </div>

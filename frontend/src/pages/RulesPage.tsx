@@ -9,14 +9,21 @@ interface UserRule {
   user_id: string
   search_term: string
   fixed_category: string
+  fixed_subcategory: string | null
   created_at?: string
+}
+
+interface UserSubcategory {
+  id: string
+  category_name: string
+  name: string
 }
 
 export function RulesPage() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
   const [isCreating, setIsCreating] = useState(false)
-  const [formData, setFormData] = useState({ search_term: '', fixed_category: '' })
+  const [formData, setFormData] = useState({ search_term: '', fixed_category: '', fixed_subcategory: '' })
 
   // Fetch user rules
   const { data: rules = [], isLoading } = useQuery<UserRule[]>({
@@ -51,18 +58,50 @@ export function RulesPage() {
     enabled: !!user?.id,
   })
 
+  // Fetch user subcategories for dropdown
+  const { data: userSubcategories = [] } = useQuery<UserSubcategory[]>({
+    queryKey: ['user_subcategories', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return []
+      const { data, error } = await supabase
+        .from('user_subcategories')
+        .select('id, category_name, name')
+        .eq('user_id', user.id)
+        .order('category_name')
+        .order('name')
+      // If table doesn't exist yet, just behave as "no subcategories" (backwards compatible).
+      if (error && (error as any).code === '42P01') return []
+      if (error) throw error
+      return data
+    },
+    enabled: !!user?.id,
+  })
+
+  const subcategoriesForSelectedCategory = userSubcategories
+    .filter((s) => s.category_name === formData.fixed_category)
+    .map((s) => s.name)
+    .sort((a, b) => a.localeCompare(b))
+
   // Create rule mutation
   const createMutation = useMutation({
-    mutationFn: async (newRule: { search_term: string; fixed_category: string }) => {
+    mutationFn: async (newRule: { search_term: string; fixed_category: string; fixed_subcategory: string | null }) => {
       const { error } = await supabase
         .from('user_rules')
         .insert([{ ...newRule, user_id: user!.id }])
+      // If column doesn't exist yet, retry without it (backwards compatible).
+      if (error && (error as any).code === '42703') {
+        const fallback = await supabase
+          .from('user_rules')
+          .insert([{ search_term: newRule.search_term, fixed_category: newRule.fixed_category, user_id: user!.id }])
+        if (fallback.error) throw fallback.error
+        return
+      }
       if (error) throw error
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user_rules'] })
       setIsCreating(false)
-      setFormData({ search_term: '', fixed_category: '' })
+      setFormData({ search_term: '', fixed_category: '', fixed_subcategory: '' })
     },
   })
 
@@ -83,12 +122,16 @@ export function RulesPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.search_term.trim() || !formData.fixed_category) return
-    createMutation.mutate(formData)
+    createMutation.mutate({
+      search_term: formData.search_term,
+      fixed_category: formData.fixed_category,
+      fixed_subcategory: formData.fixed_subcategory ? formData.fixed_subcategory : null,
+    })
   }
 
   const cancelCreate = () => {
     setIsCreating(false)
-    setFormData({ search_term: '', fixed_category: '' })
+    setFormData({ search_term: '', fixed_category: '', fixed_subcategory: '' })
   }
 
   return (
@@ -152,7 +195,7 @@ export function RulesPage() {
               </label>
               <select
                 value={formData.fixed_category}
-                onChange={(e) => setFormData({ ...formData, fixed_category: e.target.value })}
+                onChange={(e) => setFormData({ ...formData, fixed_category: e.target.value, fixed_subcategory: '' })}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 required
               >
@@ -160,6 +203,25 @@ export function RulesPage() {
                 {allCategories.map((cat) => (
                   <option key={cat.id} value={cat.name}>
                     {cat.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Sub-categoria (opcional)
+              </label>
+              <select
+                value={formData.fixed_subcategory}
+                onChange={(e) => setFormData({ ...formData, fixed_subcategory: e.target.value })}
+                disabled={!formData.fixed_category || subcategoriesForSelectedCategory.length === 0}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50"
+              >
+                <option value="">Sem sub-categoria</option>
+                {subcategoriesForSelectedCategory.map((sub) => (
+                  <option key={sub} value={sub}>
+                    {sub}
                   </option>
                 ))}
               </select>
@@ -218,7 +280,7 @@ export function RulesPage() {
                     <div className="flex-1">
                       <p className="text-sm text-gray-600 mb-1">Categorizar como:</p>
                       <span className="text-sm bg-primary-100 text-primary-700 px-3 py-1.5 rounded inline-block font-medium">
-                        {rule.fixed_category}
+                        {rule.fixed_subcategory ? `${rule.fixed_category} • ${rule.fixed_subcategory}` : rule.fixed_category}
                       </span>
                     </div>
                   </div>
