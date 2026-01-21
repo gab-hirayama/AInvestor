@@ -1,0 +1,58 @@
+swagger: "2.0"
+info:
+  title: "invoice-extractor-gw"
+  version: "1.0.0"
+schemes:
+  - https
+
+produces:
+  - application/json
+
+securityDefinitions:
+  api_key:
+    type: apiKey
+    # Google API Gateway expects API key in the standard "key" query param.
+    name: key
+    in: query
+
+security:
+  - api_key: []
+
+paths:
+  /health:
+    get:
+      operationId: health
+      x-google-backend:
+        address: https://invoice-extractor-uz5s55fvya-rj.a.run.app
+        protocol: h2
+        path_translation: APPEND_PATH_TO_ADDRESS
+      responses:
+        "200":
+          description: OK
+
+  /extrair_base64:
+    post:
+      operationId: extrairBase64
+      consumes:
+        - application/json
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - user_uuid
+              - pdf_base64
+            properties:
+              user_uuid:
+                type: string
+              pdf_base64:
+                type: string
+      x-google-backend:
+        address: https://invoice-extractor-uz5s55fvya-rj.a.run.app
+        protocol: h2
+        path_translation: APPEND_PATH_TO_ADDRESS
+      responses:
+        "200":
+          description: OK
