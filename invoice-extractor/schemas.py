@@ -2,6 +2,12 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 
 
+class ExtrairBase64Request(BaseModel):
+    """Payload para envio de PDF em base64 (usado para integração via API Gateway / frontends)"""
+    user_uuid: str = Field(..., description="UUID do usuário (string)")
+    pdf_base64: str = Field(..., description="Conteúdo do PDF em base64 (sem prefixo data:...)")
+
+
 class Transacao(BaseModel):
     """Transação extraída do PDF pela LLM"""
     data: str = Field(..., description="Data da transação no formato YYYY-MM-DD")

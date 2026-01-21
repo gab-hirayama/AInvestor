@@ -35,3 +35,9 @@ htmlcov/
 
 # Docker
 .dockerignore
+
+# Gcloud
+.gcloud/
+.gcloud-venv
+google-cloud-sdk/
+google-cloud-sdk-45

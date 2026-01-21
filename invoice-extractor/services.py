@@ -72,13 +72,13 @@ def categorizar_transacoes(
     rules = rules_response.data
     
     # Query 2: Categorias (templates)
-    categories_response = supabase.table("expense_category_template")\
+    categories_response = supabase.table("expense_category_templates")\
         .select("*")\
         .execute()
     categories = categories_response.data
     
     # Query 3: Subcategorias (templates)
-    subcategories_response = supabase.table("expense_subcategory_template")\
+    subcategories_response = supabase.table("expense_subcategory_templates")\
         .select("*")\
         .execute()
     subcategories = subcategories_response.data
