@@ -26,6 +26,7 @@ paths:
         address: https://invoice-extractor-uz5s55fvya-rj.a.run.app
         protocol: h2
         path_translation: APPEND_PATH_TO_ADDRESS
+        deadline: 300
       responses:
         "200":
           description: OK
@@ -53,6 +54,7 @@ paths:
         address: https://invoice-extractor-uz5s55fvya-rj.a.run.app
         protocol: h2
         path_translation: APPEND_PATH_TO_ADDRESS
+        deadline: 300
       responses:
         "200":
           description: OK
