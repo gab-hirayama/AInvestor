@@ -2,8 +2,8 @@ import os
 import base64
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from typing import List
-from services import extrair_texto_pdf, processar_fatura_com_gpt, categorizar_transacoes
-from schemas import TransacaoCategorizada, ExtrairBase64Request, ResultadoExtracaoCategorizada
+from services import extrair_texto_pdf, processar_fatura_com_gpt, categorizar_transacoes, filtrar_pagamentos_fatura
+from schemas import TransacaoCategorizada, ResultadoExtracaoCategorizada, ExtrairBase64Request, ResultadoExtracaoCategorizada
 
 app = FastAPI(title="API Extrator de Faturas")
 
@@ -63,9 +63,12 @@ async def extrair_transacoes(
         # 5. Processar com LLM
         resultado = processar_fatura_com_gpt(texto_pdf, openai_api_key)
         
+        # 5.1. Filtrar pagamentos de fatura (não devem aparecer no retorno)
+        transacoes_filtradas = filtrar_pagamentos_fatura(resultado.transacoes)
+        
         # 6. Categorizar transações via Supabase + LLM
         transacoes_categorizadas = categorizar_transacoes(
-            transacoes=resultado.transacoes,
+            transacoes=transacoes_filtradas,
             user_uuid=user_uuid,
             supabase_url=supabase_url,
             supabase_key=supabase_key,

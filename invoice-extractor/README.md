@@ -7,6 +7,7 @@ API FastAPI para extração de transações de faturas de cartão de crédito em
 - 📄 **Extração de PDF**: Usa `pdfplumber` para extrair texto de faturas
 - 🤖 **Estruturação com IA**: OpenAI GPT-4o + Instructor para parsing estruturado
 - 🏷️ **Categorização Inteligente**: Matching automático com regras do usuário no Supabase
+- 🚫 **Filtro de Pagamentos**: Remove automaticamente pagamentos de fatura do retorno (mantém apenas gastos e estornos legítimos)
 - 🐳 **Deploy com Docker**: Container pronto para produção
 
 ## Estrutura do Projeto
@@ -73,6 +74,8 @@ docker compose down
 ### Endpoint: `POST /extrair`
 
 Extrai transações de uma fatura PDF e retorna objeto com metadados da fatura e lista categorizada.
+
+> ⚠️ **Nota**: A API filtra automaticamente **pagamentos de fatura** do retorno. Apenas gastos e estornos legítimos são retornados. Transações com valor negativo e palavras-chave como "PAGAMENTO", "PAG FATURA", "PGTO", etc. são removidas automaticamente.
 
 **Request:**
 - Content-Type: `multipart/form-data`

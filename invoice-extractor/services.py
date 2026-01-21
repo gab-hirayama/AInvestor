@@ -180,6 +180,74 @@ def _normalizar_texto(texto: str) -> str:
     return " ".join(texto.lower().strip().split())
 
 
+def _eh_pagamento_fatura(transacao: Transacao) -> bool:
+    """
+    Identifica se uma transação é um pagamento de fatura (que deve ser filtrado).
+    
+    Critérios:
+    - Valor negativo (pagamento/estorno)
+    - Descrição contém palavras-chave de pagamento de fatura
+    
+    Args:
+        transacao: Transação a ser analisada
+        
+    Returns:
+        True se for pagamento de fatura, False caso contrário
+    """
+    # Se o valor é positivo, não é pagamento
+    if transacao.valor >= 0:
+        return False
+    
+    # Normalizar descrição para análise
+    descricao_lower = _normalizar_texto(transacao.descricao)
+    
+    # Padrões comuns de pagamento de fatura
+    padroes_pagamento = [
+        "pagamento",
+        "pag fatura",
+        "pag cartao",
+        "pag cartão", 
+        "pgto fatura",
+        "pgto cartao",
+        "pgto cartão",
+        "pagto fatura",
+        "pagto cartao", 
+        "pagto cartão",
+        "quitacao",
+        "quitação",
+        "debito automatico",
+        "debito automático",
+        "débito automático",
+        "débito automatico",
+        "ted pagamento",
+        "pix pagamento",
+        "transferencia pagamento",
+        "transferência pagamento",
+        "liquidacao fatura",
+        "liquidação fatura"
+    ]
+    
+    # Verificar se algum padrão está na descrição
+    for padrao in padroes_pagamento:
+        if padrao in descricao_lower:
+            return True
+    
+    return False
+
+
+def filtrar_pagamentos_fatura(transacoes: List[Transacao]) -> List[Transacao]:
+    """
+    Remove pagamentos de fatura da lista, mantendo apenas gastos e estornos legítimos.
+    
+    Args:
+        transacoes: Lista de transações extraídas
+        
+    Returns:
+        Lista filtrada sem pagamentos de fatura
+    """
+    return [t for t in transacoes if not _eh_pagamento_fatura(t)]
+
+
 def _categorizar_batch_com_llm(
     transacoes: List[Transacao],
     categories: list,
