@@ -4,7 +4,7 @@ import pdfplumber
 import instructor
 from openai import OpenAI
 from supabase import create_client, Client
-from schemas import ResultadoFatura, Transacao, TransacaoCategorizada, CategorizacaoLLM
+from schemas import ResultadoFatura, Transacao, TransacaoCategorizada, CategorizacaoLLM, TransacaoParaCategorizar, ResultadoCategorizacaoBatch
 
 
 def extrair_texto_pdf(file_bytes: bytes) -> str:
@@ -113,11 +113,53 @@ def categorizar_transacoes(
     # Inicializa cliente OpenAI para categorização LLM
     openai_client = instructor.from_openai(OpenAI(api_key=openai_api_key))
     
-    # Processar cada transação
+    # OTIMIZAÇÃO: Separar transações que precisam de LLM vs regras
+    transacoes_com_regra = []
+    transacoes_sem_regra = []
+    
+    for idx, transacao in enumerate(transacoes):
+        descricao_normalizada = _normalizar_texto(transacao.descricao)
+        
+        # Verificar se existe regra do usuário
+        tem_regra = False
+        for rule in rules:
+            pattern = rule.get("normalized_pattern", "")
+            if pattern and pattern in descricao_normalizada:
+                tem_regra = True
+                break
+        
+        if tem_regra:
+            transacoes_com_regra.append((idx, transacao))
+        else:
+            transacoes_sem_regra.append((idx, transacao))
+    
+    # Categorizar todas as transações SEM regra de uma vez (BATCH)
+    categorizacoes_llm = {}
+    if transacoes_sem_regra:
+        try:
+            batch_result = _categorizar_batch_com_llm(
+                transacoes=[t for _, t in transacoes_sem_regra],
+                categories=categories,
+                subcategories=subcategories,
+                openai_client=openai_client
+            )
+            # Mapear resultado por índice original
+            for idx, transacao in transacoes_sem_regra:
+                # Procurar categorização correspondente
+                for cat in batch_result.transacoes:
+                    # O índice no batch corresponde à posição na lista transacoes_sem_regra
+                    if cat.index == transacoes_sem_regra.index((idx, transacao)):
+                        categorizacoes_llm[idx] = cat
+                        break
+        except Exception as e:
+            print(f"Erro ao categorizar batch com LLM: {e}")
+    
+    # Processar cada transação (agora muito mais rápido)
     resultado = []
-    for transacao in transacoes:
+    for idx, transacao in enumerate(transacoes):
         categorizada = _categorizar_transacao_individual(
             transacao=transacao,
+            transacao_idx=idx,
             rules=rules,
             category_by_id=category_by_id,
             subcategory_by_id=subcategory_by_id,
@@ -125,9 +167,8 @@ def categorizar_transacoes(
             subcategory_by_name=subcategory_by_name,
             default_category=default_category,
             default_subcategory=default_subcategory,
-            categories=categories,
-            subcategories=subcategories,
-            openai_client=openai_client
+            categorizacoes_llm=categorizacoes_llm,
+            subcategories=subcategories
         )
         resultado.append(categorizada)
     
@@ -139,26 +180,26 @@ def _normalizar_texto(texto: str) -> str:
     return " ".join(texto.lower().strip().split())
 
 
-def _categorizar_com_llm(
-    transacao: Transacao,
+def _categorizar_batch_com_llm(
+    transacoes: List[Transacao],
     categories: list,
     subcategories: list,
     openai_client
-) -> CategorizacaoLLM:
+) -> ResultadoCategorizacaoBatch:
     """
-    Usa o LLM para categorizar uma transação com base nas categorias disponíveis.
+    Usa o LLM para categorizar MÚLTIPLAS transações de uma vez (muito mais rápido).
     
     Args:
-        transacao: Transação a ser categorizada
+        transacoes: Lista de transações a serem categorizadas
         categories: Lista de categorias disponíveis
         subcategories: Lista de subcategorias disponíveis
         openai_client: Cliente OpenAI com instructor
     
     Returns:
-        CategorizacaoLLM com a categoria e subcategoria sugeridas
+        ResultadoCategorizacaoBatch com todas as categorizações
     """
     
-    # Construir lista de categorias e subcategorias para o prompt
+    # Construir lista de categorias para o prompt
     categorias_texto = "\n".join([
         f"- {cat['name']}" for cat in categories if cat.get('type') == 'expense'
     ])
@@ -178,10 +219,15 @@ def _categorizar_com_llm(
             subcats = subcats_por_categoria[cat['id']]
             subcategorias_texto += f"\n{cat['name']}: {', '.join(subcats)}"
     
+    # Construir lista de transações para o prompt
+    transacoes_texto = ""
+    for idx, transacao in enumerate(transacoes):
+        transacoes_texto += f"\n{idx}. {transacao.descricao} (R$ {transacao.valor:.2f})"
+    
     prompt_sistema = f"""
 Você é um especialista em categorização de despesas financeiras.
 
-Sua tarefa é categorizar a transação fornecida usando APENAS as categorias e subcategorias disponíveis abaixo.
+Sua tarefa é categorizar TODAS as transações fornecidas usando APENAS as categorias e subcategorias disponíveis abaixo.
 
 CATEGORIAS DISPONÍVEIS:
 {categorias_texto}
@@ -190,41 +236,35 @@ SUBCATEGORIAS DISPONÍVEIS (por categoria):
 {subcategorias_texto}
 
 REGRAS IMPORTANTES:
-1. Use EXATAMENTE o nome da categoria como está na lista (case-sensitive)
+1. Use EXATAMENTE o nome da categoria como está na lista
 2. Se houver subcategoria apropriada, use-a; caso contrário, deixe null
 3. A subcategoria DEVE pertencer à categoria escolhida
-4. Analise o estabelecimento/descrição da transação para fazer a melhor escolha
-5. Seja assertivo - dê uma confiança alta (0.8-1.0) quando tiver certeza
+4. Analise o estabelecimento/descrição de cada transação
+5. Retorne a categorização para TODAS as transações na ordem fornecida
 """
 
     prompt_usuario = f"""
-Categorize esta transação:
+Categorize estas transações:
+{transacoes_texto}
 
-Descrição: {transacao.descricao}
-Valor: {transacao.valor}
-Data: {transacao.data}
-
-Retorne a categoria e subcategoria mais apropriadas.
+Retorne a categoria e subcategoria para cada transação usando o índice (0, 1, 2, etc).
 """
 
-    try:
-        resultado = openai_client.chat.completions.create(
-            model="gpt-4o-mini",  # Mais barato e rápido para categorização
-            response_model=CategorizacaoLLM,
-            messages=[
-                {"role": "system", "content": prompt_sistema},
-                {"role": "user", "content": prompt_usuario}
-            ],
-            temperature=0  # Determinístico
-        )
-        return resultado
-    except Exception as e:
-        print(f"Erro na categorização LLM: {e}")
-        return None
+    resultado = openai_client.chat.completions.create(
+        model="gpt-4o-mini",  # Mais barato e rápido
+        response_model=ResultadoCategorizacaoBatch,
+        messages=[
+            {"role": "system", "content": prompt_sistema},
+            {"role": "user", "content": prompt_usuario}
+        ],
+        temperature=0  # Determinístico
+    )
+    return resultado
 
 
 def _categorizar_transacao_individual(
     transacao: Transacao,
+    transacao_idx: int,
     rules: list,
     category_by_id: dict,
     subcategory_by_id: dict,
@@ -232,9 +272,8 @@ def _categorizar_transacao_individual(
     subcategory_by_name: dict,
     default_category: dict,
     default_subcategory: dict,
-    categories: list,
-    subcategories: list,
-    openai_client
+    categorizacoes_llm: dict,
+    subcategories: list
 ) -> TransacaoCategorizada:
     """
     Aplica o algoritmo de matching para uma única transação.
@@ -245,8 +284,8 @@ def _categorizar_transacao_individual(
        - Encontra todas as regras que fazem match (normalized_pattern in descrição)
        - Ordena por: confirmed_count desc, usage_count desc, len(pattern) desc
        - Usa a primeira regra encontrada
-    3. Se não houver regra, usa LLM para categorizar com base nas categorias disponíveis
-    4. Se LLM falhar, usa defaults (Outros / sem categoria)
+    3. Se não houver regra, usa categorização do LLM (batch) se disponível
+    4. Se LLM não categorizou, usa defaults (Outros / sem categoria)
     """
     
     descricao_normalizada = _normalizar_texto(transacao.descricao)
@@ -290,14 +329,9 @@ def _categorizar_transacao_individual(
             subcategory_id = subcategory["id"]
             subcategory_name = subcategory["name"]
     else:
-        # PASSO 2: Não há regra do usuário, usar LLM para categorizar
-        try:
-            categoria_llm = _categorizar_com_llm(
-                transacao=transacao,
-                categories=categories,
-                subcategories=subcategories,
-                openai_client=openai_client
-            )
+        # PASSO 2: Não há regra do usuário, usar categorização do LLM (batch)
+        if transacao_idx in categorizacoes_llm:
+            categoria_llm = categorizacoes_llm[transacao_idx]
             
             # Aplicar resultado do LLM
             if categoria_llm and categoria_llm.categoria:
@@ -324,9 +358,6 @@ def _categorizar_transacao_individual(
                         if matching_subcat:
                             subcategory_id = matching_subcat["id"]
                             subcategory_name = matching_subcat["name"]
-        except Exception as e:
-            # Se LLM falhar, não fazer nada (vai para fallback)
-            print(f"Erro ao categorizar com LLM: {e}")
         
         # PASSO 3: Se LLM não categorizou, usar fallback
         if not category_id and default_category:

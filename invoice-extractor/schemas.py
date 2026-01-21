@@ -42,6 +42,25 @@ class CategorizacaoLLM(BaseModel):
     confianca: float = Field(..., description="Confiança da categorização de 0 a 1", ge=0, le=1)
 
 
+class TransacaoParaCategorizar(BaseModel):
+    """Transação a ser categorizada pelo LLM"""
+    index: int = Field(..., description="Índice da transação na lista original")
+    descricao: str = Field(..., description="Descrição da transação")
+    valor: float = Field(..., description="Valor da transação")
+
+
+class CategorizacaoLLMBatch(BaseModel):
+    """Categorização em batch de múltiplas transações"""
+    index: int = Field(..., description="Índice da transação na lista original")
+    categoria: str = Field(..., description="Nome da categoria que melhor se encaixa")
+    subcategoria: Optional[str] = Field(None, description="Nome da subcategoria que melhor se encaixa (se aplicável)")
+
+
+class ResultadoCategorizacaoBatch(BaseModel):
+    """Resultado da categorização em batch"""
+    transacoes: List[CategorizacaoLLMBatch] = Field(..., description="Lista de transações categorizadas")
+
+
 class ResultadoExtracaoCategorizada(BaseModel):
     """Resultado completo da extração com metadados da fatura e transações categorizadas"""
     banco_emissor: Optional[str] = Field(None, description="Nome do banco emissor da fatura")
