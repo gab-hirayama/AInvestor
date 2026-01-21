@@ -120,6 +120,88 @@ for t in transacoes:
     print(f"{t['date']} - {t['description']}: R$ {t['amount']}")
 ```
 
+## Deploy econômico no GCP (recomendado: Cloud Run)
+
+O **Cloud Run** é a opção mais econômica para essa API porque:
+- escala para **zero** quando não há tráfego (`min-instances=0`)
+- cobra por **tempo de CPU/memória durante requisições**
+- você só paga build/storage da imagem e uso real do serviço
+
+### 1) Pré-requisitos
+
+- Instale o `gcloud` e autentique:
+
+```bash
+gcloud auth login
+gcloud auth application-default login
+```
+
+- Selecione o projeto e região (ex.: `southamerica-east1`):
+
+```bash
+gcloud config set project SEU_PROJECT_ID
+gcloud config set run/region southamerica-east1
+```
+
+### 2) Criar repositório no Artifact Registry
+
+```bash
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
+gcloud artifacts repositories create invoice-extractor \
+  --repository-format=docker \
+  --location=southamerica-east1
+```
+
+### 3) Build e push da imagem (Cloud Build)
+
+Na raiz do repositório (onde existe a pasta `invoice-extractor/`):
+
+```bash
+gcloud builds submit ./invoice-extractor \
+  --tag southamerica-east1-docker.pkg.dev/SEU_PROJECT_ID/invoice-extractor/api:latest
+```
+
+### 4) Guardar segredos (Secret Manager)
+
+```bash
+gcloud services enable secretmanager.googleapis.com
+
+printf "%s" "SUA_OPENAI_KEY" | gcloud secrets create OPENAI_API_KEY --data-file=-
+printf "%s" "SUA_SUPABASE_URL" | gcloud secrets create SUPABASE_URL --data-file=-
+printf "%s" "SUA_SUPABASE_PUBLISHABLE_KEY" | gcloud secrets create SUPABASE_PUBLISHABLE_KEY --data-file=-
+```
+
+> Opcional/legado: se você realmente precisar (não recomendado em produção), crie também `SUPABASE_SERVICE_ROLE_KEY`.
+
+### 5) Deploy no Cloud Run
+
+```bash
+gcloud run deploy invoice-extractor \
+  --image southamerica-east1-docker.pkg.dev/SEU_PROJECT_ID/invoice-extractor/api:latest \
+  --allow-unauthenticated \
+  --port 8080 \
+  --cpu 1 \
+  --memory 1Gi \
+  --concurrency 4 \
+  --min-instances 0 \
+  --max-instances 2 \
+  --timeout 300 \
+  --set-secrets OPENAI_API_KEY=OPENAI_API_KEY:latest,SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_PUBLISHABLE_KEY=SUPABASE_PUBLISHABLE_KEY:latest
+```
+
+Depois disso, o Cloud Run vai imprimir a URL do serviço.
+
+### 6) Dicas de custo (importante)
+
+- **`min-instances=0`**: garante “escala para zero” (principal economia).
+- **`max-instances` baixo**: evita explosão de custo em picos (ajuste depois).
+- **Timeout**: se o OpenAI demorar, aumente; se quiser cortar custo, reduza.
+- **Região**: use uma região próxima do seu Supabase/usuários para reduzir latência.
+
+### 7) Saúde do serviço
+
+O health check está em `GET /health`.
+
 ### Health Check:
 
 ```bash
