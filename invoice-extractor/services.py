@@ -4,7 +4,7 @@ import pdfplumber
 import instructor
 from openai import OpenAI
 from supabase import create_client, Client
-from schemas import ResultadoFatura, Transacao, TransacaoCategorizada
+from schemas import ResultadoFatura, Transacao, TransacaoCategorizada, CategorizacaoLLM
 
 
 def extrair_texto_pdf(file_bytes: bytes) -> str:
@@ -48,16 +48,19 @@ def categorizar_transacoes(
     transacoes: List[Transacao],
     user_uuid: str,
     supabase_url: str,
-    supabase_key: str
+    supabase_key: str,
+    openai_api_key: str
 ) -> List[TransacaoCategorizada]:
     """
-    Categoriza as transações usando regras e templates do Supabase.
+    Categoriza as transações usando regras do usuário e LLM como fallback.
     
     Fluxo:
-    1. Busca regras do usuário (transactions_category_rules)
-    2. Busca categorias disponíveis (expanse_category_template)
-    3. Busca subcategorias disponíveis (expense_subcategory_template)
-    4. Para cada transação, aplica matching por normalized_pattern
+    1. Busca regras do usuário (transaction_category_rules)
+    2. Busca categorias disponíveis (expense_category_templates)
+    3. Busca subcategorias disponíveis (expense_subcategory_templates)
+    4. Para cada transação:
+       a) Tenta aplicar regra do usuário (prioridade máxima)
+       b) Se não houver regra, usa LLM para categorizar com base nas categorias disponíveis
     5. Retorna lista de transações categorizadas
     """
     
@@ -87,6 +90,10 @@ def categorizar_transacoes(
     category_by_id = {cat["id"]: cat for cat in categories}
     subcategory_by_id = {sub["id"]: sub for sub in subcategories}
     
+    # Construir lookup por nome (case-insensitive)
+    category_by_name = {cat["name"].lower(): cat for cat in categories}
+    subcategory_by_name = {sub["name"].lower(): sub for sub in subcategories}
+    
     # Encontrar categoria "Outros" (expense) para fallback
     default_category = next(
         (cat for cat in categories if cat.get("name") == "Outros" and cat.get("type") == "expense"),
@@ -103,6 +110,9 @@ def categorizar_transacoes(
             None
         )
     
+    # Inicializa cliente OpenAI para categorização LLM
+    openai_client = instructor.from_openai(OpenAI(api_key=openai_api_key))
+    
     # Processar cada transação
     resultado = []
     for transacao in transacoes:
@@ -111,8 +121,13 @@ def categorizar_transacoes(
             rules=rules,
             category_by_id=category_by_id,
             subcategory_by_id=subcategory_by_id,
+            category_by_name=category_by_name,
+            subcategory_by_name=subcategory_by_name,
             default_category=default_category,
-            default_subcategory=default_subcategory
+            default_subcategory=default_subcategory,
+            categories=categories,
+            subcategories=subcategories,
+            openai_client=openai_client
         )
         resultado.append(categorizada)
     
@@ -124,28 +139,119 @@ def _normalizar_texto(texto: str) -> str:
     return " ".join(texto.lower().strip().split())
 
 
+def _categorizar_com_llm(
+    transacao: Transacao,
+    categories: list,
+    subcategories: list,
+    openai_client
+) -> CategorizacaoLLM:
+    """
+    Usa o LLM para categorizar uma transação com base nas categorias disponíveis.
+    
+    Args:
+        transacao: Transação a ser categorizada
+        categories: Lista de categorias disponíveis
+        subcategories: Lista de subcategorias disponíveis
+        openai_client: Cliente OpenAI com instructor
+    
+    Returns:
+        CategorizacaoLLM com a categoria e subcategoria sugeridas
+    """
+    
+    # Construir lista de categorias e subcategorias para o prompt
+    categorias_texto = "\n".join([
+        f"- {cat['name']}" for cat in categories if cat.get('type') == 'expense'
+    ])
+    
+    # Agrupar subcategorias por categoria
+    subcats_por_categoria = {}
+    for subcat in subcategories:
+        cat_id = subcat.get("category_template_id")
+        if cat_id not in subcats_por_categoria:
+            subcats_por_categoria[cat_id] = []
+        subcats_por_categoria[cat_id].append(subcat["name"])
+    
+    # Construir texto de subcategorias
+    subcategorias_texto = ""
+    for cat in categories:
+        if cat.get('type') == 'expense' and cat['id'] in subcats_por_categoria:
+            subcats = subcats_por_categoria[cat['id']]
+            subcategorias_texto += f"\n{cat['name']}: {', '.join(subcats)}"
+    
+    prompt_sistema = f"""
+Você é um especialista em categorização de despesas financeiras.
+
+Sua tarefa é categorizar a transação fornecida usando APENAS as categorias e subcategorias disponíveis abaixo.
+
+CATEGORIAS DISPONÍVEIS:
+{categorias_texto}
+
+SUBCATEGORIAS DISPONÍVEIS (por categoria):
+{subcategorias_texto}
+
+REGRAS IMPORTANTES:
+1. Use EXATAMENTE o nome da categoria como está na lista (case-sensitive)
+2. Se houver subcategoria apropriada, use-a; caso contrário, deixe null
+3. A subcategoria DEVE pertencer à categoria escolhida
+4. Analise o estabelecimento/descrição da transação para fazer a melhor escolha
+5. Seja assertivo - dê uma confiança alta (0.8-1.0) quando tiver certeza
+"""
+
+    prompt_usuario = f"""
+Categorize esta transação:
+
+Descrição: {transacao.descricao}
+Valor: {transacao.valor}
+Data: {transacao.data}
+
+Retorne a categoria e subcategoria mais apropriadas.
+"""
+
+    try:
+        resultado = openai_client.chat.completions.create(
+            model="gpt-4o-mini",  # Mais barato e rápido para categorização
+            response_model=CategorizacaoLLM,
+            messages=[
+                {"role": "system", "content": prompt_sistema},
+                {"role": "user", "content": prompt_usuario}
+            ],
+            temperature=0  # Determinístico
+        )
+        return resultado
+    except Exception as e:
+        print(f"Erro na categorização LLM: {e}")
+        return None
+
+
 def _categorizar_transacao_individual(
     transacao: Transacao,
     rules: list,
     category_by_id: dict,
     subcategory_by_id: dict,
+    category_by_name: dict,
+    subcategory_by_name: dict,
     default_category: dict,
-    default_subcategory: dict
+    default_subcategory: dict,
+    categories: list,
+    subcategories: list,
+    openai_client
 ) -> TransacaoCategorizada:
     """
     Aplica o algoritmo de matching para uma única transação.
     
     Algoritmo:
     1. Normaliza a descrição da transação
-    2. Encontra todas as regras que fazem match (normalized_pattern in descrição)
-    3. Ordena por: confirmed_count desc, usage_count desc, len(pattern) desc
-    4. Usa a primeira regra encontrada
-    5. Se não houver regra, usa defaults
+    2. Tenta aplicar regra do usuário (PRIORIDADE MÁXIMA):
+       - Encontra todas as regras que fazem match (normalized_pattern in descrição)
+       - Ordena por: confirmed_count desc, usage_count desc, len(pattern) desc
+       - Usa a primeira regra encontrada
+    3. Se não houver regra, usa LLM para categorizar com base nas categorias disponíveis
+    4. Se LLM falhar, usa defaults (Outros / sem categoria)
     """
     
     descricao_normalizada = _normalizar_texto(transacao.descricao)
     
-    # Encontrar regras que fazem match
+    # PASSO 1: Tentar aplicar regra do usuário (PRIORIDADE)
     matching_rules = []
     for rule in rules:
         pattern = rule.get("normalized_pattern", "")
@@ -168,7 +274,7 @@ def _categorizar_transacao_individual(
     subcategory_name = None
     subcategory_id = None
     
-    # Se encontrou regra, aplicar
+    # Se encontrou regra do usuário, aplicar (TEM PRIORIDADE)
     if matching_rules:
         best_rule = matching_rules[0]
         cat_id = best_rule.get("category_template_id")
@@ -184,12 +290,50 @@ def _categorizar_transacao_individual(
             subcategory_id = subcategory["id"]
             subcategory_name = subcategory["name"]
     else:
-        # Fallback para categoria/subcategoria default
-        if default_category:
+        # PASSO 2: Não há regra do usuário, usar LLM para categorizar
+        try:
+            categoria_llm = _categorizar_com_llm(
+                transacao=transacao,
+                categories=categories,
+                subcategories=subcategories,
+                openai_client=openai_client
+            )
+            
+            # Aplicar resultado do LLM
+            if categoria_llm and categoria_llm.categoria:
+                cat_nome_lower = categoria_llm.categoria.lower()
+                if cat_nome_lower in category_by_name:
+                    category = category_by_name[cat_nome_lower]
+                    category_id = category["id"]
+                    category_name = category["name"]
+                    
+                    # Tentar aplicar subcategoria se fornecida
+                    if categoria_llm.subcategoria:
+                        subcat_nome_lower = categoria_llm.subcategoria.lower()
+                        # Filtrar subcategorias dessa categoria
+                        subcats_da_categoria = [
+                            sub for sub in subcategories 
+                            if sub.get("category_template_id") == category_id
+                        ]
+                        # Procurar subcategoria por nome
+                        matching_subcat = next(
+                            (sub for sub in subcats_da_categoria 
+                             if sub.get("name", "").lower() == subcat_nome_lower),
+                            None
+                        )
+                        if matching_subcat:
+                            subcategory_id = matching_subcat["id"]
+                            subcategory_name = matching_subcat["name"]
+        except Exception as e:
+            # Se LLM falhar, não fazer nada (vai para fallback)
+            print(f"Erro ao categorizar com LLM: {e}")
+        
+        # PASSO 3: Se LLM não categorizou, usar fallback
+        if not category_id and default_category:
             category_id = default_category["id"]
             category_name = default_category["name"]
         
-        if default_subcategory:
+        if not subcategory_id and default_subcategory:
             subcategory_id = default_subcategory["id"]
             subcategory_name = default_subcategory["name"]
     

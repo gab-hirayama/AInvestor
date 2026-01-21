@@ -72,7 +72,7 @@ docker compose down
 
 ### Endpoint: `POST /extrair`
 
-Extrai transações de uma fatura PDF e retorna lista categorizada.
+Extrai transações de uma fatura PDF e retorna objeto com metadados da fatura e lista categorizada.
 
 **Request:**
 - Content-Type: `multipart/form-data`
@@ -82,17 +82,21 @@ Extrai transações de uma fatura PDF e retorna lista categorizada.
 
 **Response:**
 ```json
-[
-  {
-    "date": "2024-06-01",
-    "description": "Restaurante Casa Verde",
-    "amount": 75.9,
-    "category_name": "Alimentação",
-    "category_id": "7d9623ea-ea98-43ab-bf55-4cba9ff86c69",
-    "subcategory_name": "Restaurantes",
-    "subcategory_id": "5507f132-735d-4a01-878c-f395aea1364b"
-  }
-]
+{
+  "banco_emissor": "Nubank",
+  "data_vencimento": "2024-07-15",
+  "transacoes": [
+    {
+      "date": "2024-06-01",
+      "description": "Restaurante Casa Verde",
+      "amount": 75.9,
+      "category_name": "Alimentação",
+      "category_id": "7d9623ea-ea98-43ab-bf55-4cba9ff86c69",
+      "subcategory_name": "Restaurantes",
+      "subcategory_id": "5507f132-735d-4a01-878c-f395aea1364b"
+    }
+  ]
+}
 ```
 
 ### Exemplo com cURL:
@@ -114,10 +118,14 @@ files = {"file": open("fatura.pdf", "rb")}
 data = {"user_uuid": "7c8a7459-971e-469d-a117-334578df57bf"}
 
 response = requests.post(url, files=files, data=data)
-transacoes = response.json()
+resultado = response.json()
 
-for t in transacoes:
+print(f"Banco: {resultado['banco_emissor']}")
+print(f"Vencimento: {resultado['data_vencimento']}")
+print(f"\nTransações:")
+for t in resultado['transacoes']:
     print(f"{t['date']} - {t['description']}: R$ {t['amount']}")
+```
 ```
 
 ## Deploy econômico no GCP (recomendado: Cloud Run)

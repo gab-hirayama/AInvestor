@@ -33,3 +33,17 @@ class TransacaoCategorizada(BaseModel):
     category_id: Optional[str] = Field(None, description="UUID da categoria")
     subcategory_name: Optional[str] = Field(None, description="Nome da subcategoria")
     subcategory_id: Optional[str] = Field(None, description="UUID da subcategoria")
+
+
+class CategorizacaoLLM(BaseModel):
+    """Categorização sugerida pelo LLM para uma transação"""
+    categoria: str = Field(..., description="Nome da categoria que melhor se encaixa")
+    subcategoria: Optional[str] = Field(None, description="Nome da subcategoria que melhor se encaixa (se aplicável)")
+    confianca: float = Field(..., description="Confiança da categorização de 0 a 1", ge=0, le=1)
+
+
+class ResultadoExtracaoCategorizada(BaseModel):
+    """Resultado completo da extração com metadados da fatura e transações categorizadas"""
+    banco_emissor: Optional[str] = Field(None, description="Nome do banco emissor da fatura")
+    data_vencimento: Optional[str] = Field(None, description="Data de vencimento da fatura no formato YYYY-MM-DD")
+    transacoes: List[TransacaoCategorizada] = Field(..., description="Lista de transações categorizadas")

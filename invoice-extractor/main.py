@@ -3,7 +3,7 @@ import base64
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from typing import List
 from services import extrair_texto_pdf, processar_fatura_com_gpt, categorizar_transacoes
-from schemas import TransacaoCategorizada, ExtrairBase64Request
+from schemas import TransacaoCategorizada, ExtrairBase64Request, ResultadoExtracaoCategorizada
 
 app = FastAPI(title="API Extrator de Faturas")
 
@@ -14,14 +14,14 @@ async def health_check():
     return {"status": "healthy"}
 
 
-@app.post("/extrair", response_model=List[TransacaoCategorizada])
+@app.post("/extrair", response_model=ResultadoExtracaoCategorizada)
 async def extrair_transacoes(
     file: UploadFile = File(...),
     user_uuid: str = Form(...)
 ):
     """
     Endpoint que recebe um PDF e o UUID do usuário.
-    Retorna JSON com lista de transações já categorizadas via Supabase.
+    Retorna JSON com metadados da fatura e lista de transações já categorizadas via Supabase.
     """
     
     # 1. Validação básica
@@ -63,15 +63,21 @@ async def extrair_transacoes(
         # 5. Processar com LLM
         resultado = processar_fatura_com_gpt(texto_pdf, openai_api_key)
         
-        # 6. Categorizar transações via Supabase
+        # 6. Categorizar transações via Supabase + LLM
         transacoes_categorizadas = categorizar_transacoes(
             transacoes=resultado.transacoes,
             user_uuid=user_uuid,
             supabase_url=supabase_url,
-            supabase_key=supabase_key
+            supabase_key=supabase_key,
+            openai_api_key=openai_api_key
         )
         
-        return transacoes_categorizadas
+        # 7. Retornar objeto completo com metadados
+        return ResultadoExtracaoCategorizada(
+            banco_emissor=resultado.banco_emissor,
+            data_vencimento=resultado.data_vencimento,
+            transacoes=transacoes_categorizadas
+        )
 
     except HTTPException:
         raise
@@ -80,11 +86,12 @@ async def extrair_transacoes(
         raise HTTPException(status_code=500, detail=f"Erro no processamento: {str(e)}")
 
 
-@app.post("/extrair_base64", response_model=List[TransacaoCategorizada])
+@app.post("/extrair_base64", response_model=ResultadoExtracaoCategorizada)
 async def extrair_transacoes_base64(payload: ExtrairBase64Request):
     """
     Endpoint alternativo para integrações que não suportam upload multipart.
     Recebe o PDF em base64 (JSON) e o UUID do usuário.
+    Retorna JSON com metadados da fatura e lista de transações já categorizadas.
     """
 
     # 1) Validar variáveis de ambiente necessárias
@@ -131,15 +138,21 @@ async def extrair_transacoes_base64(payload: ExtrairBase64Request):
         # 5. Processar com LLM
         resultado = processar_fatura_com_gpt(texto_pdf, openai_api_key)
 
-        # 6. Categorizar transações via Supabase
+        # 6. Categorizar transações via Supabase + LLM
         transacoes_categorizadas = categorizar_transacoes(
             transacoes=resultado.transacoes,
             user_uuid=payload.user_uuid,
             supabase_url=supabase_url,
-            supabase_key=supabase_key
+            supabase_key=supabase_key,
+            openai_api_key=openai_api_key
         )
 
-        return transacoes_categorizadas
+        # 7. Retornar objeto completo com metadados
+        return ResultadoExtracaoCategorizada(
+            banco_emissor=resultado.banco_emissor,
+            data_vencimento=resultado.data_vencimento,
+            transacoes=transacoes_categorizadas
+        )
 
     except HTTPException:
         raise
